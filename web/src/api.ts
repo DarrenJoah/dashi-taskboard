@@ -153,6 +153,17 @@ export async function listProjects(signal?: AbortSignal): Promise<Project[]> {
   return data.projects;
 }
 
+export async function openIssueInIterm(
+  taskId: string,
+  workspacePath?: string,
+): Promise<"new" | "resume"> {
+  const data = await request<{ mode: "new" | "resume" }>("/api/local/terminal/open-issue", {
+    method: "POST",
+    body: JSON.stringify({ taskId, workspacePath }),
+  });
+  return data.mode;
+}
+
 export async function getJiraConnection(signal?: AbortSignal): Promise<JiraConnection> {
   try {
     const data = await request<{ connection: JiraConnection }>("/api/local/jira-connection", { signal });

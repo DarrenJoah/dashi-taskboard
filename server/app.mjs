@@ -48,6 +48,7 @@ import { ProjectSummaryService } from "./project-summary.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
+const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 const JSON_BODY_LIMIT = 1024 * 1024;
 const PROJECT_README_BODY_LIMIT = 3 * 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
@@ -1826,6 +1827,62 @@ export function createTaskboardServer(options = {}) {
           });
         }
         return sendJson(response, 200, { status: "ok" });
+      }
+
+      if (pathname === "/api/local/terminal/open-issue") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        if (process.platform !== "darwin") {
+          throw new ApiError(409, "ITERM_UNAVAILABLE", "iTerm2 is only available on macOS");
+        }
+        assertNoQuery(url.searchParams, "POST /api/local/terminal/open-issue");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["taskId", "workspacePath"]));
+        const taskId = stringField(body.taskId, "taskId", { required: true, maxLength: 128 });
+        const task = database.getTask(taskId);
+        if (!task || task.archivedAt != null) {
+          throw new ApiError(404, "TASK_NOT_FOUND", `Task '${taskId}' does not exist`);
+        }
+        if (task.threadBinding?.codexProjectKind === "remote") {
+          throw new ApiError(409, "REMOTE_THREAD_UNAVAILABLE", "An SSH conversation cannot be resumed in local iTerm2");
+        }
+        const configuredWorkspace = body.workspacePath === undefined
+          ? null
+          : stringField(body.workspacePath, "workspacePath", { required: true });
+        if (configuredWorkspace && !path.isAbsolute(configuredWorkspace)) {
+          throw new ApiError(400, "INVALID_FIELD", "'workspacePath' must be absolute");
+        }
+        const project = database.getProject(task.projectId);
+        const workspacePath = task.threadBinding?.workspacePath
+          ?? (task.developmentContext?.type === "worktree" ? task.developmentContext.path : null)
+          ?? configuredWorkspace
+          ?? project?.workspacePath
+          ?? os.homedir();
+        const workspace = await stat(workspacePath).catch(() => null);
+        if (!workspace?.isDirectory()) {
+          throw new ApiError(409, "WORKSPACE_UNAVAILABLE", "The issue workspace is not available on this device");
+        }
+        const taskboardUrl = `http://127.0.0.1:${request.socket.localPort}${routePrefix}`;
+        const taskctlPath = path.join(PROJECT_ROOT, "cli", "taskctl.mjs");
+        const command = task.threadBinding?.threadId
+          ? `${shellQuote(resolved.codexExecutable)} resume ${shellQuote(task.threadBinding.threadId)}`
+          : `${shellQuote(resolved.codexExecutable)} ${shellQuote(`[$manage-taskboard](${resolved.skillPath}) 议题 ID：${task.identifier}。当前 Taskboard CLI：node ${taskctlPath}；服务：${taskboardUrl}`)}`;
+        const terminalCommand = `cd ${shellQuote(workspacePath)} && export CODEX_TASKBOARD_URL=${shellQuote(taskboardUrl)} && exec ${command}`;
+        const script = [
+          "on run argv",
+          "tell application \"iTerm\"",
+          "activate",
+          "if (count of windows) is 0 then",
+          "create window with default profile",
+          "else",
+          "tell current window to create tab with default profile",
+          "end if",
+          "tell current session of current window to write text (item 1 of argv)",
+          "end tell",
+          "end run",
+        ].join("\n");
+        await execFileAsync("/usr/bin/osascript", ["-e", script, terminalCommand]);
+        return sendJson(response, 200, { mode: task.threadBinding?.threadId ? "resume" : "new" });
       }
 
       if (pathname === "/api/client-storage") {

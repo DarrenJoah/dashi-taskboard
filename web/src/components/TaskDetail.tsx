@@ -135,6 +135,7 @@ interface TaskDetailProps {
   onOpenThread: (binding: CodexThreadBinding) => void;
   onOpenLegacyLocalThread: (threadId: string) => void;
   onOpenInThread: (task: Task) => void;
+  onOpenInIterm: (task: Task) => void;
   onCopy: (text: string, announcement: string) => void;
   openingThread: boolean;
   onError: (message: TaskDetailError | null) => void;
@@ -413,6 +414,7 @@ export function TaskDetail({
   onOpenThread,
   onOpenLegacyLocalThread,
   onOpenInThread,
+  onOpenInIterm,
   onCopy,
   openingThread,
   onError,
@@ -1673,6 +1675,13 @@ export function TaskDetail({
                 <span>{openingThread
                   ? text("正在打开…", "Opening…")
                   : text("在新对话打开", "Open in new conversation")}</span>
+              </button>
+              <button
+                className="detail-open-thread-action"
+                type="button"
+                onClick={() => onOpenInIterm(currentTask)}
+              >
+                <span>{text("在 iTerm2 打开", "Open in iTerm2")}</span>
               </button>
               {currentTask.externalUrl && (
                 <a
