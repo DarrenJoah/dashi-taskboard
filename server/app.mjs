@@ -1895,9 +1895,10 @@ export function createTaskboardServer(options = {}) {
         const taskctlPath = path.join(PROJECT_ROOT, "cli", "taskctl.mjs");
         const threadId = task.threadBinding?.threadId
           ?? await latestItermTaskThread(resolved.codexHistoryPath, task.identifier);
+        const codexCommand = `${shellQuote(resolved.codexExecutable)} --sandbox danger-full-access --ask-for-approval never`;
         const command = threadId
-          ? `${shellQuote(resolved.codexExecutable)} resume ${shellQuote(threadId)}`
-          : `${shellQuote(resolved.codexExecutable)} ${shellQuote(`[$manage-taskboard](${resolved.skillPath}) 议题 ID：${task.identifier}。当前 Taskboard CLI：node ${taskctlPath}；服务：${taskboardUrl}`)}`;
+          ? `${codexCommand} resume ${shellQuote(threadId)}`
+          : `${codexCommand} ${shellQuote(`[$manage-taskboard](${resolved.skillPath}) 议题 ID：${task.identifier}。当前 Taskboard CLI：node ${taskctlPath}；服务：${taskboardUrl}`)}`;
         const terminalCommand = `cd ${shellQuote(workspacePath)} && export CODEX_TASKBOARD_URL=${shellQuote(taskboardUrl)} && exec ${command}`;
         const script = [
           "on run argv",
