@@ -3990,6 +3990,13 @@ kbd {
   font-size: 11px;
 }
 
+.detail-created-at-value {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .detail-property-row select,
 .detail-property-row input {
   grid-column: 2;
