@@ -1870,19 +1870,46 @@ export function createTaskboardServer(options = {}) {
         const terminalCommand = `cd ${shellQuote(workspacePath)} && export CODEX_TASKBOARD_URL=${shellQuote(taskboardUrl)} && exec ${command}`;
         const script = [
           "on run argv",
+          "set issueKey to item 2 of argv",
+          "set legacyTitle to \"处理议题 \" & (item 3 of argv)",
           "tell application \"iTerm\"",
+          "repeat with terminalWindow in windows",
+          "repeat with terminalTab in tabs of terminalWindow",
+          "repeat with terminalSession in sessions of terminalTab",
+          "set boundIssueKey to \"\"",
+          "try",
+          "set boundIssueKey to (variable \"user.taskboardIssueId\" of terminalSession) as text",
+          "end try",
+          "set sessionTitle to name of terminalSession",
+          "if boundIssueKey is issueKey or sessionTitle is legacyTitle or sessionTitle starts with (legacyTitle & \" |\") then",
+          "select terminalWindow",
+          "select terminalTab",
+          "select terminalSession",
+          "activate",
+          "return \"reused\"",
+          "end if",
+          "end repeat",
+          "end repeat",
+          "end repeat",
           "activate",
           "if (count of windows) is 0 then",
           "create window with default profile",
           "else",
           "tell current window to create tab with default profile",
           "end if",
-          "tell current session of current window to write text (item 1 of argv)",
+          "tell current session of current window",
+          "set variable named \"user.taskboardIssueId\" to issueKey",
+          "write text (item 1 of argv)",
           "end tell",
+          "end tell",
+          "return \"new\"",
           "end run",
         ].join("\n");
-        await execFileAsync("/usr/bin/osascript", ["-e", script, terminalCommand]);
-        return sendJson(response, 200, { mode: task.threadBinding?.threadId ? "resume" : "new" });
+        const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script, terminalCommand, task.id, task.identifier]);
+        return sendJson(response, 200, {
+          mode: task.threadBinding?.threadId ? "resume" : "new",
+          reusedTab: stdout.trim() === "reused",
+        });
       }
 
       if (pathname === "/api/client-storage") {
