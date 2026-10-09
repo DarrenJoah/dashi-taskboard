@@ -49,6 +49,33 @@ import { ProjectSummaryService } from "./project-summary.mjs";
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
 const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+
+async function latestItermTaskThread(historyPath, identifier) {
+  let history;
+  try {
+    history = await readFile(historyPath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  const issueMarker = `) 议题 ID：${identifier}。当前 Taskboard CLI：`;
+  for (const line of history.split("\n").reverse()) {
+    if (!line) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof entry.text === "string"
+      && entry.text.startsWith("[$manage-taskboard](")
+      && entry.text.includes(issueMarker)
+      && typeof entry.session_id === "string") {
+      return entry.session_id;
+    }
+  }
+  return null;
+}
 const JSON_BODY_LIMIT = 1024 * 1024;
 const PROJECT_README_BODY_LIMIT = 3 * 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
@@ -1346,6 +1373,8 @@ export function resolveServerOptions(options = {}) {
     codexExecutable: resolveCodexExecutable({ explicit: options.codexExecutable }),
     codexStatePath: options.codexStatePath
       ?? path.join(codexHome, ".codex-global-state.json"),
+    codexHistoryPath: options.codexHistoryPath
+      ?? path.join(codexHome, "history.jsonl"),
     codexProcessesPath: options.codexProcessesPath
       ?? path.join(codexHome, "process_manager", "chat_processes.json"),
     instanceToken,
@@ -1864,8 +1893,10 @@ export function createTaskboardServer(options = {}) {
         }
         const taskboardUrl = `http://127.0.0.1:${request.socket.localPort}${routePrefix}`;
         const taskctlPath = path.join(PROJECT_ROOT, "cli", "taskctl.mjs");
-        const command = task.threadBinding?.threadId
-          ? `${shellQuote(resolved.codexExecutable)} resume ${shellQuote(task.threadBinding.threadId)}`
+        const threadId = task.threadBinding?.threadId
+          ?? await latestItermTaskThread(resolved.codexHistoryPath, task.identifier);
+        const command = threadId
+          ? `${shellQuote(resolved.codexExecutable)} resume ${shellQuote(threadId)}`
           : `${shellQuote(resolved.codexExecutable)} ${shellQuote(`[$manage-taskboard](${resolved.skillPath}) 议题 ID：${task.identifier}。当前 Taskboard CLI：node ${taskctlPath}；服务：${taskboardUrl}`)}`;
         const terminalCommand = `cd ${shellQuote(workspacePath)} && export CODEX_TASKBOARD_URL=${shellQuote(taskboardUrl)} && exec ${command}`;
         const script = [
@@ -1909,7 +1940,7 @@ export function createTaskboardServer(options = {}) {
         ].join("\n");
         const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script, terminalCommand, task.id, task.identifier]);
         return sendJson(response, 200, {
-          mode: task.threadBinding?.threadId ? "resume" : "new",
+          mode: threadId ? "resume" : "new",
           reusedTab: stdout.trim() === "reused",
         });
       }
