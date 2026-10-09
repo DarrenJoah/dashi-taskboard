@@ -1879,7 +1879,7 @@ export function createTaskboardServer(options = {}) {
           "set boundIssueKey to \"\"",
           "try",
           "tell terminalSession",
-          "set boundIssueKey to (variable \"user.taskboardIssueId\") as text",
+          "set boundIssueKey to (variable named \"user.taskboardIssueId\") as text",
           "end tell",
           "end try",
           "set sessionTitle to name of terminalSession",
