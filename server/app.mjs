@@ -48,6 +48,34 @@ import { ProjectSummaryService } from "./project-summary.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
+const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+
+async function latestItermTaskThread(historyPath, identifier) {
+  let history;
+  try {
+    history = await readFile(historyPath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  const issueMarker = `) 议题 ID：${identifier}。当前 Taskboard CLI：`;
+  for (const line of history.split("\n").reverse()) {
+    if (!line) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof entry.text === "string"
+      && entry.text.startsWith("[$manage-taskboard](")
+      && entry.text.includes(issueMarker)
+      && typeof entry.session_id === "string") {
+      return entry.session_id;
+    }
+  }
+  return null;
+}
 const JSON_BODY_LIMIT = 1024 * 1024;
 const PROJECT_README_BODY_LIMIT = 3 * 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
@@ -1345,6 +1373,8 @@ export function resolveServerOptions(options = {}) {
     codexExecutable: resolveCodexExecutable({ explicit: options.codexExecutable }),
     codexStatePath: options.codexStatePath
       ?? path.join(codexHome, ".codex-global-state.json"),
+    codexHistoryPath: options.codexHistoryPath
+      ?? path.join(codexHome, "history.jsonl"),
     codexProcessesPath: options.codexProcessesPath
       ?? path.join(codexHome, "process_manager", "chat_processes.json"),
     instanceToken,
@@ -1826,6 +1856,94 @@ export function createTaskboardServer(options = {}) {
           });
         }
         return sendJson(response, 200, { status: "ok" });
+      }
+
+      if (pathname === "/api/local/terminal/open-issue") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        if (process.platform !== "darwin") {
+          throw new ApiError(409, "ITERM_UNAVAILABLE", "iTerm2 is only available on macOS");
+        }
+        assertNoQuery(url.searchParams, "POST /api/local/terminal/open-issue");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["taskId", "workspacePath"]));
+        const taskId = stringField(body.taskId, "taskId", { required: true, maxLength: 128 });
+        const task = database.getTask(taskId);
+        if (!task || task.archivedAt != null) {
+          throw new ApiError(404, "TASK_NOT_FOUND", `Task '${taskId}' does not exist`);
+        }
+        if (task.threadBinding?.codexProjectKind === "remote") {
+          throw new ApiError(409, "REMOTE_THREAD_UNAVAILABLE", "An SSH conversation cannot be resumed in local iTerm2");
+        }
+        const configuredWorkspace = body.workspacePath === undefined
+          ? null
+          : stringField(body.workspacePath, "workspacePath", { required: true });
+        if (configuredWorkspace && !path.isAbsolute(configuredWorkspace)) {
+          throw new ApiError(400, "INVALID_FIELD", "'workspacePath' must be absolute");
+        }
+        const project = database.getProject(task.projectId);
+        const workspacePath = task.threadBinding?.workspacePath
+          ?? (task.developmentContext?.type === "worktree" ? task.developmentContext.path : null)
+          ?? configuredWorkspace
+          ?? project?.workspacePath
+          ?? os.homedir();
+        const workspace = await stat(workspacePath).catch(() => null);
+        if (!workspace?.isDirectory()) {
+          throw new ApiError(409, "WORKSPACE_UNAVAILABLE", "The issue workspace is not available on this device");
+        }
+        const taskboardUrl = `http://127.0.0.1:${request.socket.localPort}${routePrefix}`;
+        const taskctlPath = path.join(PROJECT_ROOT, "cli", "taskctl.mjs");
+        const threadId = task.threadBinding?.threadId
+          ?? await latestItermTaskThread(resolved.codexHistoryPath, task.identifier);
+        const codexCommand = `${shellQuote(resolved.codexExecutable)} --sandbox danger-full-access --ask-for-approval never`;
+        const command = threadId
+          ? `${codexCommand} resume ${shellQuote(threadId)}`
+          : `${codexCommand} ${shellQuote(`[$manage-taskboard](${resolved.skillPath}) 议题 ID：${task.identifier}。当前 Taskboard CLI：node ${taskctlPath}；服务：${taskboardUrl}`)}`;
+        const terminalCommand = `cd ${shellQuote(workspacePath)} && export CODEX_TASKBOARD_URL=${shellQuote(taskboardUrl)} && exec ${command}`;
+        const script = [
+          "on run argv",
+          "set issueKey to item 2 of argv",
+          "set legacyTitle to \"处理议题 \" & (item 3 of argv)",
+          "tell application \"iTerm\"",
+          "repeat with terminalWindow in windows",
+          "repeat with terminalTab in tabs of terminalWindow",
+          "repeat with terminalSession in sessions of terminalTab",
+          "set boundIssueKey to \"\"",
+          "try",
+          "tell terminalSession",
+          "set boundIssueKey to (variable named \"user.taskboardIssueId\") as text",
+          "end tell",
+          "end try",
+          "set sessionTitle to name of terminalSession",
+          "if boundIssueKey is issueKey or sessionTitle is legacyTitle or sessionTitle starts with (legacyTitle & \" |\") then",
+          "select terminalWindow",
+          "select terminalTab",
+          "select terminalSession",
+          "activate",
+          "return \"reused\"",
+          "end if",
+          "end repeat",
+          "end repeat",
+          "end repeat",
+          "activate",
+          "if (count of windows) is 0 then",
+          "create window with default profile",
+          "else",
+          "tell current window to create tab with default profile",
+          "end if",
+          "tell current session of current window",
+          "set variable named \"user.taskboardIssueId\" to issueKey",
+          "write text (item 1 of argv)",
+          "end tell",
+          "end tell",
+          "return \"new\"",
+          "end run",
+        ].join("\n");
+        const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script, terminalCommand, task.id, task.identifier]);
+        return sendJson(response, 200, {
+          mode: threadId ? "resume" : "new",
+          reusedTab: stdout.trim() === "reused",
+        });
       }
 
       if (pathname === "/api/client-storage") {

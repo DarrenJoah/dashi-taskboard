@@ -98,6 +98,7 @@ import {
 } from "./IssueRelations";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
 import { buildIssueUrl } from "../issueRoute";
+import { createdDateTime } from "../createdDateTime";
 import { postEmbeddedHostMessage } from "../embeddedHost.mjs";
 import copyIdIcon from "../assets/figma-taskboard/copy-id.svg";
 import copyLinkIcon from "../assets/figma-taskboard/copy-link.svg";
@@ -135,6 +136,7 @@ interface TaskDetailProps {
   onOpenThread: (binding: CodexThreadBinding) => void;
   onOpenLegacyLocalThread: (threadId: string) => void;
   onOpenInThread: (task: Task) => void;
+  onOpenInIterm: (task: Task) => void;
   onCopy: (text: string, announcement: string) => void;
   openingThread: boolean;
   onError: (message: TaskDetailError | null) => void;
@@ -413,6 +415,7 @@ export function TaskDetail({
   onOpenThread,
   onOpenLegacyLocalThread,
   onOpenInThread,
+  onOpenInIterm,
   onCopy,
   openingThread,
   onError,
@@ -1674,6 +1677,13 @@ export function TaskDetail({
                   ? text("正在打开…", "Opening…")
                   : text("在新对话打开", "Open in new conversation")}</span>
               </button>
+              <button
+                className="detail-open-thread-action"
+                type="button"
+                onClick={() => onOpenInIterm(currentTask)}
+              >
+                <span>{text("在 iTerm2 打开", "Open in iTerm2")}</span>
+              </button>
               {currentTask.externalUrl && (
                 <a
                   className="detail-copy-action detail-external-action"
@@ -1720,6 +1730,12 @@ export function TaskDetail({
               </button>
             </div>
             <h2>{text("属性", "Properties")}</h2>
+            <div className="detail-property-row">
+              <span className="detail-property-label">{text("创建时间", "Created")}</span>
+              <time className="detail-created-at-value" dateTime={currentTask.createdAt}>
+                {createdDateTime(currentTask.createdAt)}
+              </time>
+            </div>
             <div className="detail-property-row">
               <span className="detail-property-label">{text("状态", "Status")}</span>
               <TaskPropertyPicker
@@ -1920,16 +1936,12 @@ export function TaskDetail({
                 () => onRemoveRelation(anchor, type, relatedTaskId),
               )}
             />
-            <div className="detail-timestamps">
+            {currentTask.updatedAt !== currentTask.createdAt && <div className="detail-timestamps">
               <span>{text(
-                `创建于 ${exactTime(currentTask.createdAt, locale)}`,
-                `Created ${exactTime(currentTask.createdAt, locale)}`,
-              )}</span>
-              {currentTask.updatedAt !== currentTask.createdAt && <span>{text(
                 `更新于 ${exactTime(currentTask.updatedAt, locale)}`,
                 `Updated ${exactTime(currentTask.updatedAt, locale)}`,
-              )}</span>}
-            </div>
+              )}</span>
+            </div>}
           </aside>
         </div>
       </div>

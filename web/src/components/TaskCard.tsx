@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { resolvePersistedAttachmentUrl } from "../api";
+import { createdDateTime } from "../createdDateTime";
 import {
   TASK_PRIORITIES,
   type ActorIdentity,
@@ -88,10 +89,9 @@ function calendarDate(value: string, locale: string) {
     .format(new Date(`${value}T12:00:00`));
 }
 
-function createdDate(value: string, locale: string, text: (chinese: string, english: string) => string) {
-  const formatted = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" })
-    .format(new Date(value));
-  return text(`${formatted}创建`, `Created ${formatted}`);
+function createdDate(value: string, text: (chinese: string, english: string) => string) {
+  const formatted = createdDateTime(value);
+  return text(`创建于 ${formatted}`, `Created ${formatted}`);
 }
 
 function elapsedTime(startedAt: string | null, now: number) {
@@ -613,7 +613,7 @@ export function TaskCard({
       )}
       {showCreatedAt && (
         <time className="task-card-created-at" dateTime={task.createdAt}>
-          {createdDate(task.createdAt, locale, text)}
+          {createdDate(task.createdAt, text)}
         </time>
       )}
     </article>

@@ -37,6 +37,7 @@ import {
   listProjects,
   listTasks,
   moveTask as moveTaskRequest,
+  openIssueInIterm,
   publishHostRuntime,
   removeTaskRelation,
   resolveTaskboardUrl,
@@ -3159,6 +3160,26 @@ export function App() {
     });
   }
 
+  async function openTaskInIterm(task: Task) {
+    setActionError(null);
+    try {
+      if (task.threadBinding?.codexProjectKind === "remote"
+        || projectCodexIdentities[task.projectId]?.codexProjectKind === "remote") {
+        setActionError(text("iTerm2 只能打开本机项目。", "iTerm2 can only open local projects."));
+        return;
+      }
+      const project = projects.find((candidate) => candidate.id === task.projectId);
+      const workspacePath = task.threadBinding?.workspacePath
+        ?? (task.developmentContext?.type === "worktree" ? task.developmentContext.path : undefined)
+        ?? deviceWorkspacePaths[task.projectId]
+        ?? project?.workspacePath
+        ?? undefined;
+      await openIssueInIterm(task.id, workspacePath);
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
   function changeProject(projectId: string) {
     closeContextMenu();
     setProjectContextMenu(null);
@@ -3754,6 +3775,7 @@ export function App() {
             onOpenThread={openThread}
             onOpenLegacyLocalThread={openLegacyLocalThread}
             onOpenInThread={openTaskInThread}
+            onOpenInIterm={(task) => void openTaskInIterm(task)}
             onCopy={(text, message) => void copyText(text, message)}
             openingThread={openingThreadTaskId === detailTask.id}
             onError={setActionError}

@@ -1,4 +1,5 @@
 import type { CSSProperties, DragEvent } from "react";
+import { createdDateTime } from "../createdDateTime";
 import { useTaskCardDragPreview } from "../useTaskCardDragPreview";
 import type { ActorIdentity, Task, TaskDraft, TaskStatus } from "../types";
 import type { TaskCardPresentation, TaskConversationItem } from "../taskConversations";
@@ -72,6 +73,9 @@ function ArchivedTaskCard({
           </>
         )}
       </div>
+      <time className="task-card-created-at" dateTime={task.createdAt}>
+        {text(`创建于 ${createdDateTime(task.createdAt)}`, `Created ${createdDateTime(task.createdAt)}`)}
+      </time>
     </article>
   );
 }

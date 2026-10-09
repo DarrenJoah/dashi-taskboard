@@ -26,7 +26,7 @@ export interface BoardDisplaySettings {
 export const DEFAULT_BOARD_DISPLAY_SETTINGS: BoardDisplaySettings = {
   cover: true,
   body: false,
-  createdAt: false,
+  createdAt: true,
   mainStatuses: [...MAIN_STATUSES],
   sidebarStatuses: [...SECONDARY_STATUSES, "archived"],
   hiddenStatuses: [],
