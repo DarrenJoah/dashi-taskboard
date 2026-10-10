@@ -8304,7 +8304,43 @@ kbd {
   pointer-events: auto;
 }
 
-.task-conversation-trigger:not(.is-multiple):not(.is-agent-session) {
+.task-conversation-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.task-conversation-actions .task-conversation-trigger:not(.is-multiple):not(.has-platform-label) {
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: max-content;
+  margin-left: 0;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.task-conversation-trigger.is-cli-entry {
+  border-style: dashed;
+}
+
+.task-conversation-cli-icon {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.task-conversation-action-error {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.task-conversation-trigger:not(.is-multiple):not(.has-platform-label) {
   width: 20px;
   min-width: 20px;
   padding: 0;
@@ -8325,6 +8361,30 @@ kbd {
 .task-conversation-trigger .taskboard-icon {
   width: 16px;
   height: 16px;
+}
+
+.task-conversation-trigger.is-platform-codex {
+  border-color: color-mix(in srgb, #a78bfa 44%, var(--border));
+  background: color-mix(in srgb, #7c3aed 13%, var(--surface));
+  color: #c4b5fd;
+}
+
+.task-conversation-trigger.is-platform-claude {
+  border-color: color-mix(in srgb, #fb923c 48%, var(--border));
+  background: color-mix(in srgb, #ea580c 13%, var(--surface));
+  color: #fdba74;
+}
+
+.task-conversation-platform-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  object-fit: contain;
+}
+
+.task-conversation-platform-icon.is-claude {
+  color: #fb923c;
 }
 
 .task-conversation-menu {
@@ -8388,6 +8448,34 @@ kbd {
 .task-conversation-menu-icon .taskboard-icon {
   width: 13px;
   height: 13px;
+}
+
+.task-conversation-menu-icon.is-platform-codex {
+  color: #c4b5fd;
+}
+
+.task-conversation-menu-icon.is-platform-claude {
+  color: #fb923c;
+}
+
+.task-conversation-menu-icon img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.task-conversation-platform-mark.is-claude {
+  font-size: 19px;
+  line-height: 1;
+}
+
+.task-conversation-menu-error {
+  margin: 5px 8px 7px;
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .task-conversation-menu-copy {

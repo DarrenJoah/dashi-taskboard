@@ -76,6 +76,66 @@ async function latestItermTaskThread(historyPath, identifier) {
   }
   return null;
 }
+
+async function ttyForClaudeSession(claudeSessionId) {
+  if (process.platform !== "darwin" || !claudeSessionId) return "";
+  let sessionFiles;
+  try {
+    sessionFiles = await readdir(path.join(os.homedir(), ".claude", "sessions"));
+  } catch {
+    return "";
+  }
+  const matchingTtys = [];
+  for (const fileName of sessionFiles) {
+    if (!/^\d+\.json$/.test(fileName)) continue;
+    let session;
+    try {
+      session = JSON.parse(await readFile(path.join(os.homedir(), ".claude", "sessions", fileName), "utf8"));
+    } catch {
+      continue;
+    }
+    const pid = Number(fileName.slice(0, -5));
+    if (session?.sessionId !== claudeSessionId || session.pid !== pid || typeof session.cwd !== "string") continue;
+    try {
+      const { stdout } = await execFileAsync("/usr/sbin/lsof", ["+c", "0", "-a", "-p", String(pid), "-d", "cwd,0", "-Fpcfn"], {
+        maxBuffer: 64 * 1024,
+      });
+      let command = "";
+      let descriptor = "";
+      let cwd = "";
+      let tty = "";
+      for (const line of stdout.split("\n")) {
+        if (line.startsWith("c")) command = line.slice(1).toLowerCase();
+        else if (line.startsWith("f")) descriptor = line.slice(1);
+        else if (line.startsWith("n") && descriptor === "cwd") cwd = line.slice(1);
+        else if (line.startsWith("n") && descriptor === "0") tty = line.slice(1);
+      }
+      if (command === "claude.exe" && cwd === session.cwd && /^\/dev\/ttys\S+$/.test(tty)) matchingTtys.push(tty);
+    } catch {
+      // A session record may outlive its process; never adopt it without a live terminal.
+    }
+  }
+  const uniqueTtys = [...new Set(matchingTtys)];
+  return uniqueTtys.length === 1 ? uniqueTtys[0] : "";
+}
+
+async function readItermSessionBindings(filePath) {
+  try {
+    const value = JSON.parse(await readFile(filePath, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+async function writeItermSessionBindings(filePath, bindings) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(bindings)}\n`, { mode: 0o600 });
+  await rename(temporaryPath, filePath);
+}
+
 const JSON_BODY_LIMIT = 1024 * 1024;
 const PROJECT_README_BODY_LIMIT = 3 * 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
@@ -1366,6 +1426,7 @@ export function resolveServerOptions(options = {}) {
     cloudConfigPath: options.cloudConfigPath ?? path.join(dataDirectory, "cloud-companion.json"),
     jiraConfigPath: options.jiraConfigPath ?? path.join(dataDirectory, "jira-connection.json"),
     clientStoragePath: options.clientStoragePath ?? path.join(dataDirectory, "client-storage.json"),
+    itermSessionBindingsPath: options.itermSessionBindingsPath ?? path.join(dataDirectory, "iterm-session-bindings.json"),
     staticDirectory: options.staticDirectory ?? path.join(PROJECT_ROOT, "dist", "web"),
     skillPath: options.skillPath
       ?? environment.CODEX_TASKBOARD_SKILL_PATH
@@ -1866,8 +1927,17 @@ export function createTaskboardServer(options = {}) {
         assertNoQuery(url.searchParams, "POST /api/local/terminal/open-issue");
         const body = await readJson(request);
         assertPlainObject(body);
-        assertAllowedKeys(body, new Set(["taskId", "workspacePath"]));
+        assertAllowedKeys(body, new Set(["taskId", "workspacePath", "platform", "sessionId"]));
         const taskId = stringField(body.taskId, "taskId", { required: true, maxLength: 128 });
+        const platform = body.platform === undefined
+          ? "codex"
+          : stringField(body.platform, "platform", { required: true, maxLength: 16 });
+        if (platform !== "codex" && platform !== "claude") {
+          throw new ApiError(400, "INVALID_FIELD", "'platform' must be 'codex' or 'claude'");
+        }
+        const requestedSessionId = body.sessionId === undefined
+          ? null
+          : stringField(body.sessionId, "sessionId", { required: true, maxLength: 512 });
         const task = database.getTask(taskId);
         if (!task || task.archivedAt != null) {
           throw new ApiError(404, "TASK_NOT_FOUND", `Task '${taskId}' does not exist`);
@@ -1886,45 +1956,104 @@ export function createTaskboardServer(options = {}) {
           ?? (task.developmentContext?.type === "worktree" ? task.developmentContext.path : null)
           ?? configuredWorkspace
           ?? project?.workspacePath
-          ?? os.homedir();
+          ?? (platform === "claude" ? path.join(os.homedir(), ".claude") : os.homedir());
         const workspace = await stat(workspacePath).catch(() => null);
         if (!workspace?.isDirectory()) {
           throw new ApiError(409, "WORKSPACE_UNAVAILABLE", "The issue workspace is not available on this device");
         }
         const taskboardUrl = `http://127.0.0.1:${request.socket.localPort}${routePrefix}`;
         const taskctlPath = path.join(PROJECT_ROOT, "cli", "taskctl.mjs");
-        const threadId = task.threadBinding?.threadId
-          ?? await latestItermTaskThread(resolved.codexHistoryPath, task.identifier);
-        const codexCommand = `${shellQuote(resolved.codexExecutable)} --sandbox danger-full-access --ask-for-approval never`;
+        const itermSessionBindings = await readItermSessionBindings(resolved.itermSessionBindingsPath);
+        const savedSessionId = itermSessionBindings[task.id]?.[platform] ?? "";
+        const threadId = requestedSessionId
+          ?? (platform === "codex"
+            ? task.threadBinding?.threadId
+              ?? await latestItermTaskThread(resolved.codexHistoryPath, task.identifier)
+            : task.agentSession?.platform === "claude" ? task.agentSession.sessionId : null);
+        const taskPrompt = `Taskboard 任务 ${task.identifier}：${task.title}。请先阅读 manage-taskboard 技能：${resolved.skillPath}，并根据任务内容继续处理。当前 Taskboard CLI：node ${shellQuote(taskctlPath)}；服务：${taskboardUrl}`;
+        const exactClaudeTty = platform === "claude" ? await ttyForClaudeSession(threadId) : "";
+        const reusableSessionId = platform === "claude" && threadId ? "" : savedSessionId;
+        const executable = platform === "codex"
+          ? `${shellQuote(resolved.codexExecutable)} --sandbox danger-full-access --ask-for-approval never`
+          : "claude";
         const command = threadId
-          ? `${codexCommand} resume ${shellQuote(threadId)}`
-          : `${codexCommand} ${shellQuote(`[$manage-taskboard](${resolved.skillPath}) 议题 ID：${task.identifier}。当前 Taskboard CLI：node ${taskctlPath}；服务：${taskboardUrl}`)}`;
+          ? platform === "codex"
+            ? `${executable} resume ${shellQuote(threadId)}`
+            : `${executable} --resume ${shellQuote(threadId)}`
+          : `${executable} ${shellQuote(taskPrompt)}`;
         const terminalCommand = `cd ${shellQuote(workspacePath)} && export CODEX_TASKBOARD_URL=${shellQuote(taskboardUrl)} && exec ${command}`;
         const script = [
           "on run argv",
           "set issueKey to item 2 of argv",
           "set legacyTitle to \"处理议题 \" & (item 3 of argv)",
+          "set savedSessionId to item 5 of argv",
+          "set exactClaudeTty to item 6 of argv",
+          "set issueTitle to item 7 of argv",
+          "set matchingCount to 0",
+          "set savedMatchCount to 0",
           "tell application \"iTerm\"",
           "repeat with terminalWindow in windows",
           "repeat with terminalTab in tabs of terminalWindow",
           "repeat with terminalSession in sessions of terminalTab",
-          "set boundIssueKey to \"\"",
-          "try",
-          "tell terminalSession",
-          "set boundIssueKey to (variable named \"user.taskboardIssueId\") as text",
-          "end tell",
-          "end try",
           "set sessionTitle to name of terminalSession",
-          "if boundIssueKey is issueKey or sessionTitle is legacyTitle or sessionTitle starts with (legacyTitle & \" |\") then",
+          "set sessionTty to tty of terminalSession",
+          "set sessionUniqueId to unique id of terminalSession",
+          "if (item 4 of argv) is \"codex\" and issueTitle is not \"\" and sessionTitle contains issueTitle and sessionTitle contains \"(codex)\" then",
+          "set matchingCount to matchingCount + 1",
+          "end if",
+          "if (item 4 of argv) is \"claude\" and exactClaudeTty is not \"\" and sessionTty is exactClaudeTty then",
           "select terminalWindow",
           "select terminalTab",
           "select terminalSession",
           "activate",
-          "return \"reused\"",
+          "return \"reused:\" & sessionUniqueId",
+          "end if",
+          "if savedSessionId is not \"\" and sessionUniqueId is savedSessionId then",
+          "set savedMatchCount to savedMatchCount + 1",
+          "end if",
+          "if (item 4 of argv) is \"codex\" and (sessionTitle is legacyTitle or sessionTitle starts with (legacyTitle & \" |\")) then",
+          "select terminalWindow",
+          "select terminalTab",
+          "select terminalSession",
+          "activate",
+          "return \"reused:\" & sessionUniqueId",
           "end if",
           "end repeat",
           "end repeat",
           "end repeat",
+          "if matchingCount is 1 then",
+          "repeat with terminalWindow in windows",
+          "repeat with terminalTab in tabs of terminalWindow",
+          "repeat with terminalSession in sessions of terminalTab",
+          "set sessionTitle to name of terminalSession",
+          "if sessionTitle contains issueTitle and sessionTitle contains \"(codex)\" then",
+          "set sessionUniqueId to unique id of terminalSession",
+          "select terminalWindow",
+          "select terminalTab",
+          "select terminalSession",
+          "activate",
+          "return \"reused:\" & sessionUniqueId",
+          "end if",
+          "end repeat",
+          "end repeat",
+          "end repeat",
+          "end if",
+          "if savedMatchCount is 1 then",
+          "repeat with terminalWindow in windows",
+          "repeat with terminalTab in tabs of terminalWindow",
+          "repeat with terminalSession in sessions of terminalTab",
+          "if (unique id of terminalSession) is savedSessionId then",
+          "set sessionUniqueId to unique id of terminalSession",
+          "select terminalWindow",
+          "select terminalTab",
+          "select terminalSession",
+          "activate",
+          "return \"reused:\" & sessionUniqueId",
+          "end if",
+          "end repeat",
+          "end repeat",
+          "end repeat",
+          "end if",
           "activate",
           "if (count of windows) is 0 then",
           "create window with default profile",
@@ -1932,18 +2061,46 @@ export function createTaskboardServer(options = {}) {
           "tell current window to create tab with default profile",
           "end if",
           "tell current session of current window",
-          "set variable named \"user.taskboardIssueId\" to issueKey",
+          "set sessionUniqueId to unique id",
           "write text (item 1 of argv)",
           "end tell",
           "end tell",
-          "return \"new\"",
+          "return \"new:\" & sessionUniqueId",
           "end run",
         ].join("\n");
-        const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script, terminalCommand, task.id, task.identifier]);
+        const { stdout } = await execFileAsync("/usr/bin/osascript", ["-e", script, terminalCommand, task.id, task.identifier, platform, reusableSessionId, exactClaudeTty, task.title]);
+        const terminalResult = stdout.trim();
+        const resultPrefix = terminalResult.startsWith("reused:") ? "reused:" : "new:";
+        const sessionId = terminalResult.startsWith(resultPrefix) ? terminalResult.slice(resultPrefix.length) : "";
+        if (sessionId) {
+          itermSessionBindings[task.id] = { ...(itermSessionBindings[task.id] ?? {}), [platform]: sessionId };
+          await writeItermSessionBindings(resolved.itermSessionBindingsPath, itermSessionBindings);
+        }
         return sendJson(response, 200, {
           mode: threadId ? "resume" : "new",
-          reusedTab: stdout.trim() === "reused",
+          reusedTab: terminalResult.startsWith("reused:"),
         });
+      }
+
+      if (pathname === "/api/local/agent/open-app") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        if (process.platform !== "darwin") {
+          throw new ApiError(409, "AGENT_APP_UNAVAILABLE", "Claude Desktop is only available on macOS");
+        }
+        assertNoQuery(url.searchParams, "POST /api/local/agent/open-app");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["platform"]));
+        const platform = stringField(body.platform, "platform", { required: true, maxLength: 16 });
+        if (platform !== "claude") {
+          throw new ApiError(400, "INVALID_FIELD", "Only the Claude app can be opened through this route");
+        }
+        try {
+          await execFileAsync("/usr/bin/open", ["-a", "Claude"]);
+        } catch (error) {
+          throw new ApiError(409, "AGENT_APP_UNAVAILABLE", `Could not open Claude Desktop: ${error.message}`);
+        }
+        return sendJson(response, 200, { opened: true });
       }
 
       if (pathname === "/api/client-storage") {

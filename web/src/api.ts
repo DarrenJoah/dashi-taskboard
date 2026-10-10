@@ -156,12 +156,21 @@ export async function listProjects(signal?: AbortSignal): Promise<Project[]> {
 export async function openIssueInIterm(
   taskId: string,
   workspacePath?: string,
+  platform: "codex" | "claude" = "codex",
+  sessionId?: string,
 ): Promise<"new" | "resume"> {
   const data = await request<{ mode: "new" | "resume" }>("/api/local/terminal/open-issue", {
     method: "POST",
-    body: JSON.stringify({ taskId, workspacePath }),
+    body: JSON.stringify({ taskId, workspacePath, platform, sessionId }),
   });
   return data.mode;
+}
+
+export async function openClaudeApp(): Promise<void> {
+  await request<{ opened: true }>("/api/local/agent/open-app", {
+    method: "POST",
+    body: JSON.stringify({ platform: "claude" }),
+  });
 }
 
 export async function getJiraConnection(signal?: AbortSignal): Promise<JiraConnection> {
