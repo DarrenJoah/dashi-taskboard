@@ -3174,7 +3174,15 @@ export function App() {
         ?? deviceWorkspacePaths[task.projectId]
         ?? project?.workspacePath
         ?? undefined;
-      await openIssueInIterm(task.id, workspacePath);
+      const sessionId = task.threadBinding?.threadId
+        ?? task.legacyLocalThreadId
+        ?? task.threadId
+        ?? [...(task.conversationRefs ?? [])]
+          .flatMap((conversation) => "threadId" in conversation
+            ? [{ threadId: conversation.threadId, updatedAt: conversation.updatedAt }]
+            : [])
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.threadId;
+      await openIssueInIterm(task.id, workspacePath, "codex", sessionId ?? undefined);
     } catch (error) {
       setActionError(errorMessage(error));
     }
